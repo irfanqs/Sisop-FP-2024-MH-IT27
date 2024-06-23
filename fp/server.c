@@ -37,6 +37,80 @@ void rtrim(char *str) {
     str[n] = '\0';
 }
 
+int remove_directory(const char *path) {
+    DIR *d = opendir(path);
+    size_t path_len = strlen(path);
+    int r = -1;
+
+    if (d) {
+        struct dirent *p;
+        r = 0;
+        while (!r && (p = readdir(d))) {
+            int r2 = -1;
+            char *buf;
+            size_t len;
+
+            // Lewati entri "." dan ".."
+            if (!strcmp(p->d_name, ".") || !strcmp(p->d_name, "..")) {
+                continue;
+            }
+
+            len = path_len + strlen(p->d_name) + 2;
+            buf = malloc(len);
+            if (buf) {
+                struct stat statbuf;
+                snprintf(buf, len, "%s/%s", path, p->d_name);
+                if (!stat(buf, &statbuf)) {
+                    if (S_ISDIR(statbuf.st_mode)) {
+                        r2 = remove_directory(buf);
+                    } else {
+                        r2 = unlink(buf);
+                    }
+                }
+                free(buf);
+            }
+            r = r2;
+        }
+        closedir(d);
+    }
+
+    if (!r) {
+        r = rmdir(path);
+    }
+
+    return r;
+}
+
+void delete_directory(const char *path) {
+    struct dirent *entry;
+    DIR *dir = opendir(path);
+
+    if (dir == NULL) {
+        return;
+    }
+
+    char full_path[BUFFER_SIZE];
+    struct stat statbuf;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+        if (stat(full_path, &statbuf) == 0) {
+            if (S_ISDIR(statbuf.st_mode)) {
+                delete_directory(full_path);
+            } else {
+                remove(full_path);
+            }
+        }
+    }
+
+    closedir(dir);
+    rmdir(path);
+}
+
 void load_users();
 void register_user(const char* username, const char* password, int client_socket);
 void login_user(const char* username, const char* password, int client_socket);
@@ -461,9 +535,7 @@ void delete_room(const char *username, const char *channel, const char *room, in
     char room_dir[BUFFER_SIZE];
     snprintf(room_dir, sizeof(room_dir), "%s/%s", channel, room);
 
-    char command[2 * BUFFER_SIZE];
-    snprintf(command, sizeof(command), "rm -rf %s", room_dir);
-    if (system(command) == 0) {
+    if (remove_directory(room_dir) == 0) {
         // Log the deletion
         FILE *log = fopen("users.log", "a");
         if (log != NULL) {
@@ -763,7 +835,6 @@ void delete_chat(const char *channel, const char *room, int id_chat, int client_
     }
 }
 
-
 void create_channel(const char* username, const char* channel, const char* key, int client_socket) {
     FILE *file = fopen("channel.csv", "r+");
     if (file == NULL) {
@@ -801,19 +872,31 @@ void create_channel(const char* username, const char* channel, const char* key, 
     printf("Debug: created encrypted key %s\n", encrypted_key); // Debugging output
 
     fprintf(file, "%d,%s,%s\n", id_channel, channel, encrypted_key);
+    fclose(file);
 
     // Create channel directory and admin directory
-    char command[256];
-    sprintf(command, "mkdir -p %s/admin", channel);
-    system(command);
+    char channel_dir[BUFFER_SIZE];
+    snprintf(channel_dir, sizeof(channel_dir), "%s", channel);
+    if (mkdir(channel_dir, 0755) != 0) {
+        perror("Failed to create channel directory");
+        send(client_socket, "Channel gagal dibuat\n", strlen("Channel gagal dibuat\n"), 0);
+        return;
+    }
+
+    char admin_dir[BUFFER_SIZE];
+    snprintf(admin_dir, sizeof(admin_dir), "%s/admin", channel);
+    if (mkdir(admin_dir, 0755) != 0) {
+        perror("Failed to create admin directory");
+        send(client_socket, "Channel gagal dibuat\n", strlen("Channel gagal dibuat\n"), 0);
+        return;
+    }
 
     // Create auth.csv file inside admin directory
-    char auth_file[256];
-    sprintf(auth_file, "%s/admin/auth.csv", channel);
+    char auth_file[BUFFER_SIZE];
+    snprintf(auth_file, sizeof(auth_file), "%s/admin/auth.csv", channel);
     FILE *auth = fopen(auth_file, "w");
     if (auth == NULL) {
         perror("Failed to create auth.csv");
-        fclose(file);
         return;
     }
 
@@ -852,9 +935,7 @@ void create_channel(const char* username, const char* channel, const char* key, 
     }
 
     send(client_socket, "Channel berhasil dibuat\n", strlen("Channel berhasil dibuat\n"), 0);
-    fclose(file);
 }
-
 
 void edit_channel(const char* username, const char* old_channel, const char* new_channel, int client_socket) {
     FILE *file = fopen("channel.csv", "r");
@@ -893,10 +974,12 @@ void edit_channel(const char* username, const char* old_channel, const char* new
         remove("channel.csv");
         rename("temp.csv", "channel.csv");
 
-        // Rename the channel directory
-        char command[256];
-        sprintf(command, "mv %s %s", old_channel, new_channel);
-        system(command);
+        // Rename the channel directory using POSIX function
+        if (rename(old_channel, new_channel) != 0) {
+            perror("Failed to rename channel directory");
+            send(client_socket, "Channel gagal diubah\n", strlen("Channel gagal diubah\n"), 0);
+            return;
+        }
 
         // Log the rename
         FILE *log = fopen("users.log", "a");
@@ -953,10 +1036,8 @@ void delete_channel(const char* username, const char* channel, int client_socket
         remove("channel.csv");
         rename("temp.csv", "channel.csv");
 
-        // Remove the channel directory
-        char command[256];
-        sprintf(command, "rm -rf %s", channel);
-        system(command);
+        // Remove the channel directory using POSIX function
+        delete_directory(channel);
 
         // Log the deletion
         FILE *log = fopen("users.log", "a");
@@ -976,7 +1057,6 @@ void delete_channel(const char* username, const char* channel, int client_socket
         send(client_socket, "Channel tidak ditemukan\n", strlen("Channel tidak ditemukan\n"), 0);
     }
 }
-
 void join_channel_without_key(const char *username, const char *channel, int client_socket) {
      // Set the current channel for the client
     pthread_mutex_lock(&clients_mutex);
