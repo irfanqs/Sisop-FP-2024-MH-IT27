@@ -96,6 +96,16 @@ void login_user(int sock, const char *username, const char *password) {
             } else if (strstr(buffer, "DEL ROOM") != NULL) {
                 char *room = strtok(buffer + 9, "\n"); // Get room name after "DEL ROOM "
                 delete_room(sock, room);
+            } else if (strcmp(buffer, "Exited room\n") == 0) {
+                // Server responded with "Exited room", so clear room variable
+                strcpy(room, "");
+            } else if (strcmp(buffer, "Exited channel\n") == 0) {
+                // Server responded with "Exited channel", so clear channel and room variables
+                strcpy(channel, "");
+                strcpy(room, "");
+            } else if (strcmp(buffer, "Exited\n") == 0) {
+                // Server responded with "Exited", so break the loop and exit the program
+                break;
             } else {
                 if (strstr(buffer, "joined the channel") != NULL) {
                 // Skip the first part "username joined the channel"

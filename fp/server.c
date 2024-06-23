@@ -180,6 +180,20 @@ void handle_client(int client_socket) {
             } else if (strcmp(sub_command, "ROOM") == 0) {
                 list_room(clients[client_socket].current_channel, client_socket);
             }
+        } else if (strcmp(command, "EXIT") == 0) {
+            if (strlen(clients[client_socket].current_room) > 0) {
+                // Exiting room
+                memset(clients[client_socket].current_room, 0, sizeof(clients[client_socket].current_room));
+                send_response(client_socket, "Exited room\n");
+            } else if (strlen(clients[client_socket].current_channel) > 0) {
+                // Exiting channel
+                memset(clients[client_socket].current_channel, 0, sizeof(clients[client_socket].current_channel));
+                send_response(client_socket, "Exited channel\n");
+            } else {
+                // Exiting client
+                send_response(client_socket, "Exited\n");
+                break;
+            }
         }
         // Handle other commands here...
     }
