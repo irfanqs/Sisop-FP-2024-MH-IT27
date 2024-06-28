@@ -636,3 +636,817 @@ Fungsi `get_timestamp()` adalah fungsi pendukung yang esensial dalam sistem chat
 ```
 </details>
 
+### CHAT
+
+### Send Chat
+Proses send chat dimulai dengan pengecekan apakah user berada dalam sebuah room. Jika user berada dalam room, sistem mempersiapkan path file chat.csv di dalam direktori room tersebut. Sistem kemudian membuka file chat.csv untuk menambahkan pesan baru. Jika file tidak bisa dibuka, sistem mengirim pesan kesalahan. Namun, jika file berhasil dibuka, sistem membaca file untuk mendapatkan ID terakhir dari pesan yang ada. Setelah itu, sistem mengambil timestamp saat ini dan menambahkan pesan baru dengan format timestamp, ID, username, message ke file chat.csv. Setelah pesan berhasil ditambahkan, file ditutup, dan sistem mengirim pesan sukses ke user yang berisi timestamp, ID, dan username dari pesan yang baru dikirim.
+
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void send_chat(const char *username, const char *channel, const char *room, const char *message, int client_socket) {
+    char chat_file[BUFFER_SIZE];
+    snprintf(chat_file, sizeof(chat_file), "%s/%s/chat.csv", channel, room);
+    FILE *file = fopen(chat_file, "a+");
+    if (file == NULL) {
+        perror("Failed to open chat file");
+        send_response(client_socket, "Gagal mengirim pesan\n");
+        return;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    int id_chat = 1;
+
+    if (file_size > 0) {
+        fseek(file, 0, SEEK_SET);
+        char line[BUFFER_SIZE];
+        while (fgets(line, sizeof(line), file)) {
+            id_chat++;
+        }
+    }
+
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char date[20];
+    strftime(date, sizeof(date), "%d/%m/%Y %H:%M:%S", &tm);
+
+    fprintf(file, "%s,%d,%s,\"%s\"\n", date, id_chat, username, message);
+    fclose(file);
+
+    send_response(client_socket, "Chat berhasil terkirim\n");
+}
+```
+</details>
+
+### See Chat
+Sistem mempersiapkan path file chat.csv di dalam direktori room tersebut dan membuka file tersebut untuk membaca pesan-pesan yang ada. Jika file tidak bisa dibuka, sistem mengirim pesan kesalahan. Sistem membaca isi file chat satu per satu dan menggabungkan pesan-pesan tersebut ke dalam satu respons yang akan dikirim ke user.
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void see_chat(const char *channel, const char *room, int client_socket) {
+    char chat_file[BUFFER_SIZE];
+    snprintf(chat_file, sizeof(chat_file), "%s/%s/chat.csv", channel, room);
+    FILE *file = fopen(chat_file, "r");
+    if (file == NULL) {
+        perror("Failed to open chat file");
+        send_response(client_socket, "Gagal melihat pesan\n");
+        return;
+    }
+
+    char response[BUFFER_SIZE * 10] = "";
+    char line[BUFFER_SIZE];
+    char formatted_line[BUFFER_SIZE];
+
+    while (fgets(line, sizeof(line), file)) {
+        // Tokenize and reformat the line
+        char *date = strtok(line, ",");
+        char *id_chat = strtok(NULL, ",");
+        char *sender = strtok(NULL, ",");
+        char *chat = strtok(NULL, "\n");
+
+        snprintf(formatted_line, sizeof(formatted_line), "[%s][%s][%s] %s\n", date, id_chat, sender, chat);
+        strcat(response, formatted_line);
+    }
+
+    fclose(file);
+    send_response(client_socket, response);
+
+    // Debug statement to check if the room is correctly used
+    printf("Debug: see_chat called for channel %s, room %s\n", channel, room);
+    printf("Debug: chat_file path is %s\n", chat_file);
+}
+```
+</details>
+
+### Edit Chat
+Dalam fungsi `edit_chat`, proses edit dilakukan dengan cara membaca setiap baris dari file `chat.csv` dan menyalinnya ke sebuah file sementara (`temp_file`) kecuali baris yang sesuai dengan ID yang ingin diubah. Proses ini memastikan bahwa hanya pesan yang sesuai dengan aturan perizinan yang diizinkan untuk diedit, sesuai dengan kebutuhan dan keamanan sistem. Setelah edit selesai, file sementara digunakan untuk mengganti file `chat.csv` asli, dan informasi edit dicatat dalam log sistem sebelum memberikan respons sukses kepada user.
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void edit_chat(const char *channel, const char *room, int id_chat, const char *new_message, int client_socket) {
+    char chat_file[BUFFER_SIZE];
+    snprintf(chat_file, sizeof(chat_file), "%s/%s/chat.csv", channel, room);
+    FILE *file = fopen(chat_file, "r");
+    if (file == NULL) {
+        perror("Failed to open chat file");
+        send_response(client_socket, "Gagal mengedit pesan\n");
+        return;
+    }
+
+    FILE *temp = fopen("temp.csv", "w");
+    if (temp == NULL) {
+        perror("Failed to open temporary file");
+        fclose(file);
+        send_response(client_socket, "Gagal mengedit pesan\n");
+        return;
+    }
+
+    char line[BUFFER_SIZE];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *date = strtok(line, ",");
+        char *current_id_chat = strtok(NULL, ",");
+        char *sender = strtok(NULL, ",");
+        char *chat = strtok(NULL, "\n");
+
+        if (atoi(current_id_chat) == id_chat) {
+            found = 1;
+            // Get current timestamp
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            char new_date[BUFFER_SIZE];
+            snprintf(new_date, sizeof(new_date), "%02d/%02d/%04d %02d:%02d:%02d",
+                     tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+            fprintf(temp, "%s,%d,%s,\"%s\"\n", new_date, id_chat, sender, new_message);
+        } else {
+            fprintf(temp, "%s,%s,%s,%s\n", date, current_id_chat, sender, chat);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove(chat_file);
+        rename("temp.csv", chat_file);
+        send_response(client_socket, "Chat berhasil diedit\n");
+    } else {
+        remove("temp.csv");
+        send_response(client_socket, "ID chat tidak ditemukan\n");
+    }
+}
+```
+</details>
+
+### Delete Chat
+Fungsi `del_chat` digunakan untuk menghapus chat dalam sebuah room chat berdasarkan ID tertentu. Pertama, fungsi memeriksa apakah user sedang berada di room chat tersebut. Jika tidak, fungsi akan memberitahu user bahwa mereka harus berada di room chat untuk melakukan penghapusan. Selanjutnya, fungsi membuka file tempat chat disimpan dan membuat file sementara untuk menyimpan hasil edit. Kemudian, fungsi membaca setiap chat dalam file chat. Ketika menemukan chat dengan ID yang sesuai dengan yang diminta untuk dihapus, fungsi memeriksa izin user: jika user adalah admin atau root, mereka dapat menghapus chat apa pun; jika hanya user biasa, mereka hanya bisa menghapus chat yang mereka tulis sendiri. Setelah menemukan chat yang sesuai untuk dihapus, chat tersebut tidak disalin ke file sementara, sehingga dihapus dari file asli. Jika ID yang diminta untuk dihapus tidak ditemukan, fungsi akan memberitahu user bahwa ID tersebut tidak ada dalam room chat. Setelah menghapus chat, file asli chat diperbarui dengan file sementara yang berisi perubahan, dan kegiatan penghapusan dicatat dalam log sistem. Akhirnya, user diberi tahu bahwa penghapusan berhasil dilakukan.
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void delete_chat(const char *channel, const char *room, int id_chat, int client_socket) {
+    char chat_file[BUFFER_SIZE];
+    snprintf(chat_file, sizeof(chat_file), "%s/%s/chat.csv", channel, room);
+    FILE *file = fopen(chat_file, "r");
+    if (file == NULL) {
+        perror("Failed to open chat file");
+        send_response(client_socket, "Gagal menghapus pesan\n");
+        return;
+    }
+
+    FILE *temp = fopen("temp.csv", "w");
+    if (temp == NULL) {
+        perror("Failed to open temporary file");
+        fclose(file);
+        send_response(client_socket, "Gagal menghapus pesan\n");
+        return;
+    }
+
+    char line[BUFFER_SIZE];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *date = strtok(line, ",");
+        char *current_id_chat = strtok(NULL, ",");
+        char *sender = strtok(NULL, ",");
+        char *chat = strtok(NULL, "\n");
+
+        if (atoi(current_id_chat) == id_chat) {
+            found = 1;
+            // Skip writing this line to delete it
+            continue;
+        } else {
+            fprintf(temp, "%s,%s,%s,%s\n", date, current_id_chat, sender, chat);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove(chat_file);
+        rename("temp.csv", chat_file);
+        send_response(client_socket, "Chat berhasil dihapus\n");
+    } else {
+        remove("temp.csv");
+        send_response(client_socket, "ID chat tidak ditemukan\n");
+    }
+}
+```
+</details>
+
+**Hasil**
+![image](https://github.com/Daniwahyuaa/readmefpsisop/assets/150106905/1fe7d296-bb1d-4749-b5d1-63dab5ee3e12)
+
+## Admin 
+
+### Create Channel
+Fungsi create_channel bertujuan untuk membuat channel baru dalam sistem. fungsi akan membuka file channels.csv dan menambahkan entri baru untuk channel tersebut. fungsi ini membuat direktori baru untuk channel, direktori admin di dalamnya, dan file auth.csv di dalam direktori admin. Setelah semua direktori dan file yang diperlukan dibuat, fungsi ini mencatat kejadian pembuatan channel ke dalam log. Terakhir, fungsi ini mengirimkan pesan sukses ke client yang menunjukkan bahwa channel telah berhasil dibuat, dengan pemberi channel sebagai admin.
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void create_channel(const char* username, const char* channel, const char* key, int client_socket) {
+    FILE *file = fopen("channel.csv", "r+");
+    if (file == NULL) {
+        perror("Failed to open channel.csv");
+        exit(EXIT_FAILURE);
+    }
+
+    char line[256];
+    int id_channel = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *token = strtok(line, ",");
+        int current_id = atoi(token);
+        if (current_id > id_channel) {
+            id_channel = current_id;
+        }
+    }
+
+    id_channel++; // Increment the channel ID for the new channel
+    fseek(file, 0, SEEK_END);
+    char encrypted_key[BCRYPT_HASHSIZE];
+    char salt[BCRYPT_HASHSIZE];
+
+    if (bcrypt_gensalt(12, salt) != 0) {
+        perror("Salt generation failed");
+        fclose(file);
+        return;
+    }
+
+    if (bcrypt_hashpw(key, salt, encrypted_key) != 0) {
+        perror("Key encryption failed");
+        fclose(file);
+        return;
+    }
+
+    printf("Debug: created encrypted key %s\n", encrypted_key); // Debugging output
+
+    fprintf(file, "%d,%s,%s\n", id_channel, channel, encrypted_key);
+    fclose(file);
+
+    // Create channel directory and admin directory
+    char channel_dir[BUFFER_SIZE];
+    snprintf(channel_dir, sizeof(channel_dir), "%s", channel);
+    if (mkdir(channel_dir, 0755) != 0) {
+        perror("Failed to create channel directory");
+        send(client_socket, "Channel gagal dibuat\n", strlen("Channel gagal dibuat\n"), 0);
+        return;
+    }
+
+    char admin_dir[BUFFER_SIZE];
+    snprintf(admin_dir, sizeof(admin_dir), "%s/admin", channel);
+    if (mkdir(admin_dir, 0755) != 0) {
+        perror("Failed to create admin directory");
+        send(client_socket, "Channel gagal dibuat\n", strlen("Channel gagal dibuat\n"), 0);
+        return;
+    }
+
+    // Create auth.csv file inside admin directory
+    char auth_file[BUFFER_SIZE];
+    snprintf(auth_file, sizeof(auth_file), "%s/admin/auth.csv", channel);
+    FILE *auth = fopen(auth_file, "w");
+    if (auth == NULL) {
+        perror("Failed to create auth.csv");
+        return;
+    }
+
+    // Fetch the user ID and name
+    int id_user = 1;
+
+    // Fetch the user ID and name
+    char user_name[50];
+    FILE *users_file = fopen("users.csv", "r");
+    if (users_file != NULL) {
+        while (fgets(line, sizeof(line), users_file)) {
+            char *token = strtok(line, ",");
+            int user_id = atoi(token);
+            token = strtok(NULL, ",");
+            strcpy(user_name, token);
+            if (strcmp(user_name, username) == 0) {
+                id_user = user_id;
+                break;
+            }
+        }
+        fclose(users_file);
+    }
+    fprintf(auth, "%d,%s,ADMIN\n", id_user, user_name);
+    fclose(auth);
+
+    // Log the creation
+    FILE *log = fopen("users.log", "a");
+    if (log != NULL) {
+        time_t t = time(NULL);
+        struct tm tm = *localtime(&t);
+        fprintf(log, "[%02d/%02d/%04d %02d:%02d:%02d] %s membuat %s\n",
+                tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                tm.tm_hour, tm.tm_min, tm.tm_sec,
+                username, channel);
+        fclose(log);
+    }
+
+    send(client_socket, "Channel berhasil dibuat\n", strlen("Channel berhasil dibuat\n"), 0);
+}
+```
+</details>
+
+### Edit Channel
+Fungsi edit_channel bertujuan untuk mengubah nama channel yang sudah ada. Proses ini dimulai dengan memeriksa izin pengguna untuk channel yang akan diubah menggunakan fungsi check_channel_perms. Jika izin pengguna tidak mencukupi, fungsi akan mengirim pesan error ke client. Jika izin mencukupi, fungsi akan membuka file channels.csv dan file sementara untuk menyimpan data yang telah dimodifikasi. Selanjutnya, fungsi akan membaca setiap entri di channels.csv dan membandingkannya dengan nama channel yang akan diubah. Jika ditemukan kecocokan, fungsi akan menulis entri baru dengan nama channel yang baru ke file sementara. Jika tidak ada kecocokan, entri lama akan ditulis ulang ke file sementara. Setelah semua entri diproses, file asli channels.csv akan dihapus dan file sementara akan diganti namanya menjadi channels.csv. Jika channel yang diubah adalah channel yang sedang digunakan oleh client. Terakhir, fungsi akan mengirim pesan sukses ke client yang menunjukkan bahwa nama channel telah berhasil diubah.
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void edit_channel(const char* username, const char* old_channel, const char* new_channel, int client_socket) {
+    FILE *file = fopen("channel.csv", "r");
+    if (file == NULL) {
+        perror("Failed to open channel.csv");
+        exit(EXIT_FAILURE);
+    }
+
+    FILE *temp = fopen("temp.csv", "w");
+    if (temp == NULL) {
+        perror("Failed to open temp.csv");
+        fclose(file);
+        exit(EXIT_FAILURE);
+    }
+
+    char line[256];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *token = strtok(line, ",");
+        int id_channel = atoi(token);
+        char *channel_name = strtok(NULL, ",");
+        char *key = strtok(NULL, ",");
+
+        if (strcmp(channel_name, old_channel) == 0) {
+            fprintf(temp, "%d,%s,%s", id_channel, new_channel, key);
+            found = 1;
+        } else {
+            fprintf(temp, "%d,%s,%s", id_channel, channel_name, key);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove("channel.csv");
+        rename("temp.csv", "channel.csv");
+
+        // Rename the channel directory using POSIX function
+        if (rename(old_channel, new_channel) != 0) {
+            perror("Failed to rename channel directory");
+            send(client_socket, "Channel gagal diubah\n", strlen("Channel gagal diubah\n"), 0);
+            return;
+        }
+
+        // Log the rename
+        FILE *log = fopen("users.log", "a");
+        if (log != NULL) {
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            fprintf(log, "[%02d/%02d/%04d %02d:%02d:%02d] %s mengubah %s menjadi %s\n",
+                    tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                    tm.tm_hour, tm.tm_min, tm.tm_sec,
+                    username, old_channel, new_channel);
+            fclose(log);
+        }
+
+        send(client_socket, "Channel berhasil diubah\n", strlen("Channel berhasil diubah\n"), 0);
+    } else {
+        remove("temp.csv");
+        send(client_socket, "Channel tidak ditemukan\n", strlen("Channel tidak ditemukan\n"), 0);
+    }
+}
+```
+</details>
+
+### Delete Channel
+
+Del Channel
+Fungsi delete_channel digunakan untuk menghapus channel yang ada. fungsi akan membuka file channels.csv dan file sementara untuk menyimpan data yang telah dimodifikasi. Selanjutnya, fungsi akan membaca setiap entri di channels.csv dan membandingkannya dengan nama channel yang akan dihapus. Jika tidak ditemukan kecocokan, entri lama akan ditulis ulang ke file sementara. Jika ditemukan kecocokan, entri tersebut tidak akan ditulis ulang, menandakan bahwa channel tersebut telah dihapus. Setelah semua entri diproses, file asli channels.csv akan dihapus dan file sementara akan diganti namanya menjadi channels.csv. Kemudian, fungsi akan menghapus direktori channel yang dihapus dengan memanggil remove_directory. Jika channel yang dihapus adalah channel yang sedang digunakan oleh client, fungsi juga akan memperbarui data client untuk mengosongkan nama channel dan room yang sedang digunakan, serta mengirim pesan keluar ke client. Terakhir, fungsi akan mengirim pesan sukses ke client yang menunjukkan bahwa channel telah berhasil dihapus.
+**Kode**
+
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void delete_channel(const char* username, const char* channel, int client_socket) {
+    FILE *file = fopen("channel.csv", "r");
+    if (file == NULL) {
+        perror("Failed to open channel.csv");
+        exit(EXIT_FAILURE);
+    }
+
+    FILE *temp = fopen("temp.csv", "w");
+    if (temp == NULL) {
+        perror("Failed to open temp.csv");
+        fclose(file);
+        exit(EXIT_FAILURE);
+    }
+
+    char line[256];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *token = strtok(line, ",");
+        int id_channel = atoi(token);
+        char *channel_name = strtok(NULL, ",");
+        char *key = strtok(NULL, ",");
+
+        if (strcmp(channel_name, channel) == 0) {
+            found = 1;
+        } else {
+            fprintf(temp, "%d,%s,%s", id_channel, channel_name, key);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove("channel.csv");
+        rename("temp.csv", "channel.csv");
+
+        // Remove the channel directory using POSIX function
+        delete_directory(channel);
+
+        // Log the deletion
+        FILE *log = fopen("users.log", "a");
+        if (log != NULL) {
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            fprintf(log, "[%02d/%02d/%04d %02d:%02d:%02d] %s menghapus %s\n",
+                    tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                    tm.tm_hour, tm.tm_min, tm.tm_sec,
+                    username, channel);
+            fclose(log);
+        }
+
+        send(client_socket, "Channel berhasil dihapus\n", strlen("Channel berhasil dihapus\n"), 0);
+    } else {
+        remove("temp.csv");
+        send(client_socket, "Channel tidak ditemukan\n", strlen("Channel tidak ditemukan\n"), 0);
+    }
+}
+
+```
+</details>
+
+**Hasil**
+![image](https://github.com/Daniwahyuaa/readmefpsisop/assets/150106905/486123c9-0e1a-4b80-80b8-489a8b011d2c)
+
+### Delete Room All
+**Penjelasan**: Fungsi `delete_all_rooms` digunakan untuk menghapus semua room yang ada dalam sebuah channel. Fungsi ini juga memastikan bahwa user memiliki izin yang cukup untuk melakukan tindakan ini dan memperbarui status user jika mereka berada di dalam salah satu room yang dihapus.
+
+**Alur**:
+1. **Inisialisasi Buffer**: 
+   ```c
+   char buffer[1024];
+   ```
+   - Sebuah array karakter dengan nama `buffer` dan ukuran 1024 byte dideklarasikan. Buffer ini digunakan untuk menyimpan perintah yang akan dikirim ke server dan juga untuk menyimpan respons yang diterima dari server.
+
+2. **Konstruksi Perintah**: 
+   ```c
+   sprintf(buffer, "DEL ROOM ALL");
+   ```
+   - Fungsi `sprintf` digunakan untuk memformat string `"DEL ROOM ALL"` dan menyimpannya dalam buffer. String ini merupakan perintah yang akan dikirim ke server untuk menghapus semua ruangan.
+
+3. **Mengirim Perintah ke Socket**: 
+   ```c
+   send(sock, buffer, strlen(buffer), 0);
+   ```
+   - Fungsi `send` digunakan untuk mengirimkan isi dari buffer melalui socket yang telah ditentukan sebelumnya (`sock`). `strlen(buffer)` digunakan untuk menentukan panjang data yang akan dikirim (dalam hal ini, panjang string `"DEL ROOM ALL"`).
+
+4. **Membersihkan Buffer**: 
+   ```c
+   memset(buffer, 0, sizeof(buffer));
+   ```
+   - Fungsi `memset` digunakan untuk mengatur ulang buffer menjadi nol (`0`). Hal ini dilakukan untuk menghapus data sebelumnya yang mungkin masih ada di dalam buffer sebelum membaca respons dari server.
+
+5. **Membaca Respons dari Socket**: 
+   ```c
+   read(sock, buffer, sizeof(buffer));
+   ```
+   - Fungsi `read` digunakan untuk membaca respons dari server dan menyimpannya kembali ke dalam buffer. `sizeof(buffer)` digunakan untuk memastikan bahwa buffer memiliki ukuran yang cukup untuk menampung respons yang diterima dari server.
+
+6. **Mencetak Respons**: 
+   ```c
+   printf("%s\n", buffer);
+   ```
+   - Fungsi `printf` digunakan untuk mencetak isi dari buffer, yang sekarang berisi respons yang diterima dari server. Respons ini kemungkinan berisi pesan konfirmasi atau status yang menegaskan bahwa operasi penghapusan ruangan telah berhasil dilakukan.
+
+### Catatan Tambahan:
+- Pastikan bahwa socket (`sock`) telah diinisialisasi dan terhubung dengan server sebelum memanggil fungsi `delete_all_rooms`.
+- Penanganan kesalahan (error handling) untuk operasi-operasi socket seperti `send` dan `read` perlu diimplementasikan untuk mengatasi kemungkinan kegagalan operasi jaringan.
+- Bergantung pada aplikasi dan implementasi server Anda, mungkin diperlukan penanganan kesalahan tambahan atau mekanisme untuk memastikan keandalan operasi ini.
+
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+   
+   ```c
+
+    void delete_all_rooms(int sock) {
+    char buffer[1024];
+    sprintf(buffer, "DEL ROOM ALL");
+    send(sock, buffer, strlen(buffer), 0);
+    memset(buffer, 0, sizeof(buffer));
+    read(sock, buffer, sizeof(buffer));
+    printf("%s\n", buffer);
+}
+```
+</details>
+
+### Ban
+#### Ban User
+**Penjelasan**:
+Fungsi `check_ban` bertujuan untuk memeriksa apakah user yang terhubung ke server saat ini telah dibanned dari channel yang mereka coba akses. Fungsi ini mengakses file `auth.csv` di folder `admin` pada channel untuk memeriksa status user.
+
+### Penjelasan Alur Kode:
+
+1. **Validasi Izin Akses**:
+   - Fungsi `validate_csv_users` dan `validate_csv_auth_admin` dipanggil untuk memeriksa izin admin terhadap pengguna dan otorisasi pada kanal tertentu. Jika tidak valid, respons "Permission denied" dikirimkan ke client dan fungsi diakhiri.
+
+2. **Membuka File Auth.csv**:
+   - File `auth.csv` dari direktori yang sesuai dengan kanal dibuka dengan mode `r+` untuk operasi read/write.
+
+3. **Membuka File Temp.csv**:
+   - File `temp.csv` juga dibuka sebagai file sementara dengan mode `w` untuk penulisan.
+
+4. **Memproses Baris Auth.csv**:
+   - Setiap baris dari `auth.csv` dibaca dan diproses. Data di baris ini dipisahkan menggunakan `strtok` untuk mendapatkan `id_user`, `username`, dan `role`.
+
+5. **Penanganan User yang Akan Diban**:
+   - Jika `username` sesuai dengan `user_to_ban`, baris baru dengan status `BANNED` ditulis ke `temp.csv`. Variabel `found` disetel ke 1 untuk menunjukkan bahwa user telah ditemukan.
+   - Jika tidak sesuai, baris yang ada disalin ke `temp.csv` tanpa perubahan.
+
+6. **Penyelesaian Operasi**:
+   - Setelah semua baris diproses, file `auth.csv` dan `temp.csv` ditutup.
+   - Jika user berhasil diban (`found` adalah 1):
+     - `auth.csv` lama dihapus dan `temp.csv` diubah namanya menjadi `auth.csv`.
+     - Tindakan ban dicatat di `users.log`.
+     - Respons "User berhasil diban" dikirimkan ke client.
+   - Jika user tidak ditemukan (`found` tetap 0):
+     - `temp.csv` dihapus.
+     - Respons "User tidak ditemukan" dikirimkan ke client.
+     
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+   ```c
+void ban_user(const char *admin, const char *channel, const char *user_to_ban, int client_socket) {
+    if (!(validate_csv_users(admin, client_socket) || validate_csv_auth_admin(admin, channel))) {
+        send_response(client_socket, "Permission denied\n");
+        return;
+    }
+
+    char auth_file[BUFFER_SIZE];
+    snprintf(auth_file, sizeof(auth_file), "%s/admin/auth.csv", channel);
+    FILE *file = fopen(auth_file, "r+");
+    if (file == NULL) {
+        perror("Failed to open auth.csv");
+        send_response(client_socket, "Gagal membuka auth.csv\n");
+        return;
+    }
+
+    char temp_file[BUFFER_SIZE];
+    snprintf(temp_file, sizeof(temp_file), "%s/admin/temp.csv", channel);
+    FILE *temp = fopen(temp_file, "w");
+    if (temp == NULL) {
+        perror("Failed to open temp.csv");
+        fclose(file);
+        send_response(client_socket, "Gagal membuka temp.csv\n");
+        return;
+    }
+
+    char line[BUFFER_SIZE];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *id_user = strtok(line, ",");
+        char *username = strtok(NULL, ",");
+        char *role = strtok(NULL, "\n");
+
+        if (strcmp(username, user_to_ban) == 0) {
+            fprintf(temp, "%s,%s,BANNED\n", id_user, username);
+            found = 1;
+        } else {
+            fprintf(temp, "%s,%s,%s\n", id_user, username, role);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove(auth_file);
+        rename(temp_file, auth_file);
+
+        // Log the ban
+        char log_path[BUFFER_SIZE];
+        snprintf(log_path, sizeof(log_path), "%s/admin/users.log", channel);
+        FILE *log = fopen(log_path, "a");
+        if (log != NULL) {
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            fprintf(log, "[%02d/%02d/%04d %02d:%02d:%02d] %s memban %s\n",
+                    tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                    tm.tm_hour, tm.tm_min, tm.tm_sec,
+                    admin, user_to_ban);
+            fclose(log);
+        }
+
+        send_response(client_socket, "User berhasil diban\n");
+    } else {
+        remove(temp_file);
+        send_response(client_socket, "User tidak ditemukan\n");
+    }
+}
+
+
+```
+</details>
+
+**Hasil**
+![image](https://github.com/Daniwahyuaa/readmefpsisop/assets/150106905/dd4b818c-fc35-4597-9b00-606fe7ce1249)
+
+## Unban User
+#### Penjelasan:
+Fungsi `unban_user` digunakan untuk menghapus status banned dari user tertentu di sebuah channel. Fungsi ini mengecek apakah user yang ingin di-unbanned ada dalam channel dan memiliki status "BANNED". Jika user valid ditemukan, maka statusnya diubah kembali ke status semula sebelum di-banned.
+
+### Penjelasan Alur Kode:
+
+1. **Validasi Izin Akses**:
+   - Fungsi `validate_csv_users` dan `validate_csv_auth_admin` dipanggil untuk memverifikasi izin admin terhadap pengguna dan otorisasi pada kanal tertentu. Jika tidak valid, pesan "Permission denied" dikirimkan ke client dan fungsi berhenti.
+
+2. **Membuka File Auth.csv**:
+   - File `auth.csv` dari direktori yang sesuai dengan kanal dibuka dengan mode `r+` untuk operasi read/write.
+
+3. **Membuka File Temp.csv**:
+   - File `temp.csv` juga dibuka sebagai file sementara dengan mode `w` untuk penulisan.
+
+4. **Memproses Baris Auth.csv**:
+   - Setiap baris dari `auth.csv` dibaca dan diproses. Data di baris ini dipisahkan menggunakan `strtok` untuk mendapatkan `id_user`, `username`, dan `role`.
+
+5. **Penanganan User yang Akan Diunban**:
+   - Jika `username` sesuai dengan `user_to_unban`, baris baru dengan status `USER` (tidak diblokir) ditulis ke `temp.csv`. Variabel `found` disetel ke 1 untuk menunjukkan bahwa user telah ditemukan dan diunban.
+   - Jika tidak sesuai, baris yang ada disalin ke `temp.csv` tanpa perubahan.
+
+6. **Penyelesaian Operasi**:
+   - Setelah semua baris diproses, file `auth.csv` dan `temp.csv` ditutup.
+   - Jika user berhasil diunban (`found` adalah 1):
+     - `auth.csv` lama dihapus dan `temp.csv` diubah namanya menjadi `auth.csv`.
+     - Tindakan unban dicatat di `users.log`.
+     - Respons "User berhasil diunban" dikirimkan ke client.
+   - Jika user tidak ditemukan (`found` tetap 0):
+     - `temp.csv` dihapus.
+     - Respons "User tidak ditemukan" dikirimkan ke client.
+
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+   ```c
+void unban_user(const char *admin, const char *channel, const char *user_to_unban, int client_socket) {
+    if (!(validate_csv_users(admin, client_socket) || validate_csv_auth_admin(admin, channel))) {
+        send_response(client_socket, "Permission denied\n");
+        return;
+    }
+
+    char auth_file[BUFFER_SIZE];
+    snprintf(auth_file, sizeof(auth_file), "%s/admin/auth.csv", channel);
+    FILE *file = fopen(auth_file, "r+");
+    if (file == NULL) {
+        perror("Failed to open auth.csv");
+        send_response(client_socket, "Gagal membuka auth.csv\n");
+        return;
+    }
+
+    char temp_file[BUFFER_SIZE];
+    snprintf(temp_file, sizeof(temp_file), "%s/admin/temp.csv", channel);
+    FILE *temp = fopen(temp_file, "w");
+    if (temp == NULL) {
+        perror("Failed to open temp.csv");
+        fclose(file);
+        send_response(client_socket, "Gagal membuka temp.csv\n");
+        return;
+    }
+
+    char line[BUFFER_SIZE];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *id_user = strtok(line, ",");
+        char *username = strtok(NULL, ",");
+        char *role = strtok(NULL, "\n");
+
+        if (strcmp(username, user_to_unban) == 0) {
+            fprintf(temp, "%s,%s,USER\n", id_user, username);
+            found = 1;
+        } else {
+            fprintf(temp, "%s,%s,%s\n", id_user, username, role);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove(auth_file);
+        rename(temp_file, auth_file);
+
+        // Log the unban
+        char log_path[BUFFER_SIZE];
+        snprintf(log_path, sizeof(log_path), "%s/admin/users.log", channel);
+        FILE *log = fopen(log_path, "a");
+        if (log != NULL) {
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            fprintf(log, "[%02d/%02d/%04d %02d:%02d:%02d] %s mengunban %s\n",
+                    tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                    tm.tm_hour, tm.tm_min, tm.tm_sec,
+                    admin, user_to_unban);
+            fclose(log);
+        }
+
+        send_response(client_socket, "User berhasil diunban\n");
+    } else {
+        remove(temp_file);
+        send_response(client_socket, "User tidak ditemukan\n");
+    }
+}
+```
+</details>
+
+**Hasil**
+![image](https://github.com/Daniwahyuaa/readmefpsisop/assets/150106905/9de777e1-e903-420c-9fa2-87ce69300a76)
+
+### User
+#### List User In Channer
+**Penjelasan**: Fungsi `list_user` digunakan untuk menampilkan daftar semua pengguna yang ada di dalam channel. Hanya pengguna dengan peran "ROOT" yang diizinkan untuk menggunakan fungsi ini.
+
+### Penjelasan Alur Kode:
+
+1. **Membuka File Auth.csv**:
+   - File `auth.csv` dari direktori yang sesuai dengan kanal dibuka dengan mode `r` untuk operasi read-only.
+
+2. **Inisialisasi Variabel**:
+   - Variabel `line` digunakan untuk menyimpan setiap baris yang dibaca dari file.
+   - Variabel `response` digunakan sebagai buffer untuk menyimpan daftar pengguna yang akan dikirimkan ke client.
+
+3. **Membaca dan Mengolah Baris**:
+   - Selama ada baris yang dapat dibaca dari `auth.csv`, fungsi `fgets` digunakan untuk membacanya.
+   - Setiap baris dipisahkan menjadi `id_user` dan `username` menggunakan `strtok`.
+   - Username dari setiap baris ditambahkan ke variabel `response` dengan menambahkan spasi setelahnya.
+
+4. **Penyelesaian Operasi**:
+   - Setelah semua baris diproses, file `auth.csv` ditutup.
+   - Jika tidak ada username yang ditambahkan ke `response` (panjang string `response` adalah 0), kirimkan pesan "Tidak ada user di channel ini" ke client.
+   - Jika ada username yang ditambahkan ke `response`, kirimkan `response` (daftar pengguna) ke client.
+
+**Kode**:
+<details>
+<summary><h3>Klik untuk melihat detail</h3>></summary>
+
+```c
+void list_users_in_channel(const char *channel, int client_socket) {
+    char auth_file[BUFFER_SIZE];
+    snprintf(auth_file, sizeof(auth_file), "%s/admin/auth.csv", channel);
+    FILE *file = fopen(auth_file, "r");
+    if (file == NULL) {
+        perror("Failed to open auth.csv");
+        send_response(client_socket, "Gagal membuka auth.csv\n");
+        return;
+    }
+
+    char line[BUFFER_SIZE];
+    char response[BUFFER_SIZE] = "";
+
+    while (fgets(line, sizeof(line), file)) {
+        char *id_user = strtok(line, ",");
+        char *username = strtok(NULL, ",");
+        strcat(response, username);
+        strcat(response, " ");
+    }
+
+    fclose(file);
+
+    // If no users found, send appropriate response
+    if (strlen(response) == 0) {
+        send_response(client_socket, "Tidak ada user di channel ini\n");
+    } else {
+        send_response(client_socket, response);
+    }
+}
+```
+</details>
