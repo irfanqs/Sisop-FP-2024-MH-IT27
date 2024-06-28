@@ -1416,7 +1416,7 @@ void unban_user(const char *admin, const char *channel, const char *user_to_unba
 
 **Kode**:
 <details>
-<summary><h3>Klik untuk melihat detail</h3>></summary>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
 
 ```c
 void list_users_in_channel(const char *channel, int client_socket) {
