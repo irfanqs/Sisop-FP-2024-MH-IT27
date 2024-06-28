@@ -9,7 +9,7 @@ Anggota Kelompok :
 |5027231038|Dani Wahyu Anak Ary|
 
 # Pendahuluan
-Dalam final project praktikum DiscorIT, kami diminta untuk menyelesaikan implementasi sebuah sistem chat berbasis socket yang terdiri dari tiga file utama yaitu discorit.c (client untuk mengirim request), server.c (server yang menerima dan merespon request), dan monitor.c (client untuk menampilkan chat secara real-time).
+Dalam final project praktikum ini, kami diminta untuk menyelesaikan implementasi sebuah sistem chat yang terdiri dari tiga file utama yaitu discorit.c, server.c, dan monitor.c.
 
 Program ini memungkinkan user untuk berkomunikasi secara real-time melalui channel dan room yang dapat dikelola oleh user dengan peran tertentu. User harus melakukan autentikasi sebelum dapat mengakses fitur-fitur yang ada. Keamanan juga dijamin dengan menggunakan bcrypt untuk enkripsi password dan key channel.
 
