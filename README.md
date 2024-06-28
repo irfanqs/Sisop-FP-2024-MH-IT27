@@ -1,5 +1,3 @@
-# WIP!
-
 # Sisop-FP-2024-MH-IT27
 Anggota Kelompok :
 |  NRP|Nama Anggota  |
@@ -1452,3 +1450,588 @@ void list_users_in_channel(const char *channel, int client_socket) {
 }
 ```
 </details>
+
+#### Remove User from Channel
+**Penjelasan**: Fungsi `remove_user_from_channel` digunakan untuk menghapus user tertentu dari channel. Fungsi ini memastikan bahwa user yang ingin dihapus bukanlah user yang sedang menjalankan fungsi, serta user tersebut bukan seorang "ROOT". 
+
+### Penjelasan Alur Kode:
+
+1. **Validasi Izin Akses**:
+   - Fungsi `validate_csv_users` dan `validate_csv_auth_admin` dipanggil untuk memverifikasi izin admin terhadap pengguna dan otorisasi pada kanal tertentu. Jika tidak valid, pesan "Permission denied" dikirimkan ke client dan fungsi berhenti.
+
+2. **Membuka File Auth.csv**:
+   - File `auth.csv` dari direktori yang sesuai dengan kanal dibuka dengan mode `r+` untuk operasi read/write.
+
+3. **Membuka File Temp.csv**:
+   - File `temp.csv` juga dibuka sebagai file sementara dengan mode `w` untuk penulisan.
+
+4. **Memproses Baris Auth.csv**:
+   - Setiap baris dari `auth.csv` dibaca dan diproses. Data di baris ini dipisahkan menggunakan `strtok` untuk mendapatkan `id_user`, `username`, dan `role`.
+
+5. **Penanganan User yang Akan Dihapus**:
+   - Jika `username` sesuai dengan `user_to_remove`, baris tersebut dilewati (`continue`) untuk menandai bahwa user tersebut akan dihapus.
+   - Jika tidak sesuai, baris yang ada disalin ke `temp.csv` tanpa perubahan.
+
+6. **Penyelesaian Operasi**:
+   - Setelah semua baris diproses, file `auth.csv` dan `temp.csv` ditutup.
+   - Jika user berhasil dihapus (`found` adalah 1):
+     - `auth.csv` lama dihapus dan `temp.csv` diubah namanya menjadi `auth_file`.
+     - Tindakan penghapusan dicatat di `users.log`.
+     - Respons "User berhasil dihapus dari channel" dikirimkan ke client.
+   - Jika user tidak ditemukan (`found` tetap 0):
+     - `temp.csv` dihapus.
+     - Respons "User tidak ditemukan" dikirimkan ke client.
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya </h3>></summary>
+   
+```c
+void remove_user_from_channel(const char *admin, const char *channel, const char *user_to_remove, int client_socket) {
+    if (!(validate_csv_users(admin, client_socket) || validate_csv_auth_admin(admin, channel))) {
+        send_response(client_socket, "Permission denied\n");
+        return;
+    }
+
+    char auth_file[BUFFER_SIZE];
+    snprintf(auth_file, sizeof(auth_file), "%s/admin/auth.csv", channel);
+    FILE *file = fopen(auth_file, "r+");
+    if (file == NULL) {
+        perror("Failed to open auth.csv");
+        send_response(client_socket, "Gagal membuka auth.csv\n");
+        return;
+    }
+
+    char temp_file[BUFFER_SIZE];
+    snprintf(temp_file, sizeof(temp_file), "%s/admin/temp.csv", channel);
+    FILE *temp = fopen(temp_file, "w");
+    if (temp == NULL) {
+        perror("Failed to open temp.csv");
+        fclose(file);
+        send_response(client_socket, "Gagal membuka temp.csv\n");
+        return;
+    }
+
+    char line[BUFFER_SIZE];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *id_user = strtok(line, ",");
+        char *username = strtok(NULL, ",");
+        char *role = strtok(NULL, "\n");
+
+        if (strcmp(username, user_to_remove) == 0) {
+            found = 1;
+            continue;
+        } else {
+            fprintf(temp, "%s,%s,%s\n", id_user, username, role);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove(auth_file);
+        rename(temp_file, auth_file);
+
+        // Log the removal
+        char log_path[BUFFER_SIZE];
+        snprintf(log_path, sizeof(log_path), "%s/admin/users.log", channel);
+        FILE *log = fopen(log_path, "a");
+        if (log != NULL) {
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            fprintf(log, "[%02d/%02d/%04d %02d:%02d:%02d] %s menghapus %s\n",
+                    tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                    tm.tm_hour, tm.tm_min, tm.tm_sec,
+                    admin, user_to_remove);
+            fclose(log);
+        }
+
+        send_response(client_socket, "User berhasil dihapus dari channel\n");
+    } else {
+        remove(temp_file);
+        send_response(client_socket, "User tidak ditemukan\n");
+    }
+}
+
+```
+</details>
+
+#### Edit Own Username
+**Penjelasan**: Fungsi `edit_own_username` digunakan untuk mengedit nama pengguna yang ada dalam sistem, asalkan pengguna yang melakukan perubahan adalah admin atau root, atau pengguna yang sama yang ingin mengedit namanya sendiri.
+
+### Penjelasan Alur Kode:
+
+1. **Membuka File Users.csv**:
+   - File `users.csv` dibuka dengan mode `r` untuk operasi read-only. Jika file tidak dapat dibuka, kirim pesan kesalahan ke client dan fungsi berhenti.
+
+2. **Membuka File Temp.csv**:
+   - File `temp.csv` dibuka dengan mode `w` untuk penulisan. Jika file tidak dapat dibuka, file `users.csv` ditutup, kirim pesan kesalahan ke client dan fungsi berhenti.
+
+3. **Inisialisasi Variabel**:
+   - Variabel `line` digunakan untuk menyimpan setiap baris yang dibaca dari file.
+   - Variabel `found` digunakan untuk menandai apakah `current_username` ditemukan dalam file.
+
+4. **Membaca dan Mengolah Baris**:
+   - Setiap baris dari `users.csv` dibaca menggunakan `fgets`.
+   - Data di baris ini dipisahkan menggunakan `strtok` untuk mendapatkan `id_user`, `username`, `password`, dan `role`.
+   - Jika `username` sama dengan `current_username`, baris baru dengan `new_username` ditulis ke `temp.csv`.
+   - Jika tidak sama, baris yang ada disalin ke `temp.csv` tanpa perubahan.
+
+5. **Penyelesaian Operasi**:
+   - File `users.csv` dan `temp.csv` ditutup.
+   - Jika `current_username` ditemukan (`found` adalah 1), `users.csv` lama dihapus dan `temp.csv` diubah namanya menjadi `users.csv`.
+   - Respons "Profil diupdate menjadi [new_username]" dikirimkan ke client.
+   - Jika `current_username` tidak ditemukan (`found` tetap 0), `temp.csv` dihapus dan pesan "User tidak ditemukan" dikirimkan ke client.
+
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void edit_own_username(const char* current_username, const char* new_username, int client_socket) {
+    FILE *file = fopen("users.csv", "r");
+    if (file == NULL) {
+        perror("Failed to open users.csv");
+        send_response(client_socket, "Gagal membuka file users.csv\n");
+        return;
+    }
+
+    FILE *temp = fopen("temp.csv", "w");
+    if (temp == NULL) {
+        perror("Failed to open temp.csv");
+        fclose(file);
+        send_response(client_socket, "Gagal membuka file sementara\n");
+        return;
+    }
+
+    char line[256];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *id_user = strtok(line, ",");
+        char *username = strtok(NULL, ",");
+        char *password = strtok(NULL, ",");
+        char *role = strtok(NULL, "\n");
+
+        if (strcmp(username, current_username) == 0) {
+            fprintf(temp, "%s,%s,%s,%s\n", id_user, new_username, password, role);
+            found = 1;
+        } else {
+            fprintf(temp, "%s,%s,%s,%s\n", id_user, username, password, role);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove("users.csv");
+        rename("temp.csv", "users.csv");
+
+        char response[BUFFER_SIZE];
+        snprintf(response, sizeof(response), "Profil diupdate menjadi %s\n", new_username);
+        send_response(client_socket, response);
+    } else {
+        remove("temp.csv");
+        send_response(client_socket, "User tidak ditemukan\n");
+    }
+}
+```
+</details>
+
+
+#### Edit Own Password
+**Penjelasan**: Fungsi `edit_own_password(` digunakan untuk mengubah kata sandi pengguna yang ada dalam sistem. Pengguna yang melakukan perubahan haruslah admin, root, atau pengguna yang sama yang ingin mengedit kata sandinya sendiri.
+
+### Penjelasan Alur Kode:
+
+1. **Membuka File Users.csv**:
+   - File `users.csv` dibuka dengan mode `r` untuk operasi read-only. Jika file tidak dapat dibuka, kirim pesan kesalahan ke client dan fungsi berhenti.
+
+2. **Membuka File Temp.csv**:
+   - File `temp.csv` dibuka dengan mode `w` untuk penulisan. Jika file tidak dapat dibuka, file `users.csv` ditutup, kirim pesan kesalahan ke client dan fungsi berhenti.
+
+3. **Inisialisasi Variabel**:
+   - Variabel `line` digunakan untuk menyimpan setiap baris yang dibaca dari file.
+   - Variabel `found` digunakan untuk menandai apakah `username` ditemukan dalam file.
+
+4. **Membaca dan Mengolah Baris**:
+   - Setiap baris dari `users.csv` dibaca menggunakan `fgets`.
+   - Data di baris ini dipisahkan menggunakan `strtok` untuk mendapatkan `id_user`, `username`, `password`, dan `role`.
+   - Jika `username` sama dengan `username` yang diberikan, kata sandi baru dienkripsi dan baris baru dengan kata sandi terenkripsi ditulis ke `temp.csv`.
+   - Jika tidak sama, baris yang ada disalin ke `temp.csv` tanpa perubahan.
+
+5. **Enkripsi Kata Sandi**:
+   - Menggunakan fungsi `bcrypt_gensalt` untuk menghasilkan salt dengan work factor 12.
+   - Menggunakan fungsi `bcrypt_hashpw` untuk mengenkripsi kata sandi baru dengan salt yang dihasilkan.
+
+6. **Penyelesaian Operasi**:
+   - File `users.csv` dan `temp.csv` ditutup.
+   - Jika `username` ditemukan (`found` adalah 1), `users.csv` lama dihapus dan `temp.csv` diubah namanya menjadi `users.csv`.
+   - Respons "Password diupdate" dikirimkan ke client.
+   - Jika `username` tidak ditemukan (`found` tetap 0), `temp.csv` dihapus dan pesan "Username tidak ditemukan" dikirimkan ke client.
+
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void edit_own_password(const char* username, const char* new_password, int client_socket) {
+    FILE *file = fopen("users.csv", "r");
+    if (file == NULL) {
+        perror("Failed to open users.csv");
+        send_response(client_socket, "Failed to open users.csv\n");
+        return;
+    }
+
+    FILE *temp = fopen("temp.csv", "w");
+    if (temp == NULL) {
+        perror("Failed to open temp.csv");
+        fclose(file);
+        send_response(client_socket, "Failed to open temp.csv\n");
+        return;
+    }
+
+    char line[256];
+    int found = 0;
+    while (fgets(line, sizeof(line), file)) {
+        char *token = strtok(line, ",");
+        int id_user = atoi(token);
+        char *user = strtok(NULL, ",");
+        char *password = strtok(NULL, ",");
+        char *role = strtok(NULL, "\n");
+
+        if (strcmp(user, username) == 0) {
+            char encrypted_password[BCRYPT_HASHSIZE];
+            char salt[BCRYPT_HASHSIZE];
+
+            if (bcrypt_gensalt(12, salt) != 0) {
+                perror("Salt generation failed");
+                fclose(file);
+                fclose(temp);
+                return;
+            }
+
+            if (bcrypt_hashpw(new_password, salt, encrypted_password) != 0) {
+                perror("Password encryption failed");
+                fclose(file);
+                fclose(temp);
+                return;
+            }
+
+            fprintf(temp, "%d,%s,%s,%s\n", id_user, user, encrypted_password, role);
+            found = 1;
+        } else {
+            fprintf(temp, "%d,%s,%s,%s\n", id_user, user, password, role);
+        }
+    }
+
+    fclose(file);
+    fclose(temp);
+
+    if (found) {
+        remove("users.csv");
+        rename("temp.csv", "users.csv");
+        send_response(client_socket, "Password diupdate\n");
+    } else {
+        remove("temp.csv");
+        send_response(client_socket, "Username tidak ditemukan\n");
+    }
+}
+```
+</details>
+
+
+### Exit
+#### Exit Room
+**Penjelasan**: User keluar dari room.
+
+**Alur**:
+1. **User mengirim perintah keluar dari room**: User mengirim perintah untuk keluar dari room.
+2. **Server memproses perintah**: Server memproses permintaan ini dan mengosongkan variabel room di klien.
+
+#### Exit Channel
+**Penjelasan**: User keluar dari channel.
+
+**Alur**:
+1. **User mengirim perintah keluar dari channel**: User mengirim perintah untuk keluar dari channel.
+2. **Server memproses perintah**: Server memproses permintaan ini dan mengosongkan variabel channel di client.
+
+### User Log
+**Penjelasan**: Fungsi ini digunakan untuk mencatat pesan log ke dalam file `.log` yang terletak di direktori admin pada channel tertentu. Ini berarti semua aktivitas yang tercatat di log ini berhubungan dengan manajemen channel tersebut, seperti pembuatan dan penghapusan room, serta aktivitas lain yang relevan dengan pengelolaan channel.
+
+### Penjelasan Alur Kode
+
+1. **Membuat Path File Log**:
+   - `log_path` adalah sebuah buffer yang digunakan untuk menyimpan path ke file log.
+   - `snprintf` digunakan untuk membangun path file log dengan format `"%s/admin/users.log"` di mana `%s` pertama diisi dengan nama channel.
+
+2. **Membuka File Log**:
+   - `fopen` digunakan untuk membuka file log dalam mode append (`"a"`). Mode ini digunakan untuk menambahkan data baru ke akhir file tanpa menghapus konten yang sudah ada.
+   - Jika file berhasil dibuka (`log != NULL`), langkah-langkah selanjutnya akan dilakukan. Jika tidak, kode akan melewatkan blok `if`.
+
+3. **Mendapatkan Waktu Saat Ini**:
+   - `time_t t = time(NULL);` mendapatkan waktu saat ini.
+   - `struct tm tm = *localtime(&t);` mengonversi waktu tersebut ke dalam struktur `tm` yang berisi komponen-komponen waktu seperti hari, bulan, tahun, jam, menit, dan detik.
+
+4. **Menulis ke File Log**:
+   - `fprintf` digunakan untuk menulis pesan log ke dalam file. Format pesan log adalah: `[dd/MM/yyyy HH:mm:ss] username membuat room room di channel channel`.
+   - Komponen waktu (`tm.tm_mday`, `tm.tm_mon + 1`, `tm.tm_year + 1900`, `tm.tm_hour`, `tm.tm_min`, `tm.tm_sec`), `username`, `room`, dan `channel` disertakan dalam pesan log.
+
+5. **Menutup File Log**:
+   - `fclose(log);` menutup file log setelah penulisan selesai untuk memastikan bahwa semua data telah disimpan dengan benar.
+
+### Kesimpulan
+
+Kode ini berguna untuk mencatat setiap aktivitas pembuatan room oleh pengguna ke dalam sebuah file log dengan detail waktu dan informasi pengguna serta room yang dibuat. Ini membantu dalam melacak aktivitas pengguna dalam sistem secara terorganisir. Jika ada pertanyaan lebih lanjut atau kebutuhan akan penjelasan tambahan, jangan ragu untuk bertanya!
+
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+char log_path[BUFFER_SIZE];
+        snprintf(log_path, sizeof(log_path), "%s/admin/users.log", channel);
+        FILE *log = fopen(log_path, "a");
+        if (log != NULL) {
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            fprintf(log, "[%02d/%02d/%04d %02d:%02d:%02d] %s membuat room %s di channel %s\n",
+                tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900,
+                tm.tm_hour, tm.tm_min, tm.tm_sec,
+                username, room, channel);
+        fclose(log);
+    }
+
+```
+</details>
+
+### Monitor
+
+### Penjelasan Kode
+
+#### Bagian Header dan Definisi Makro
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <ctype.h>
+
+#define PORT 8080
+#define IP "127.0.0.1"
+#define BUFFER_SIZE 1024
+```
+
+- **Header Files**: Mengimpor berbagai header file yang diperlukan untuk operasi I/O, jaringan, threading, operasi file, dan manajemen waktu.
+- **Makro**: Mendefinisikan konstanta untuk port server, alamat IP server, dan ukuran buffer untuk komunikasi.
+
+#### Struktur dan Deklarasi Fungsi
+
+```c
+void *monitor_chat(void *args);
+
+typedef struct {
+    int socket;
+    char channel[50];
+    char room[50];
+} MonitorArgs;
+
+void rtrim(char *str) {
+    size_t n = strlen(str);
+    while (n > 0 && isspace((unsigned char)str[n - 1])) {
+        n--;
+    }
+    str[n] = '\0';
+}
+```
+
+- **MonitorArgs**: Struktur yang digunakan untuk menyimpan informasi socket, channel, dan room yang akan dipantau oleh thread.
+- **rtrim**: Fungsi untuk menghilangkan spasi putih di akhir string.
+
+#### Fungsi Register dan Login
+
+```c
+void register_user(int sock, const char *username, const char *password) {
+    char buffer[BUFFER_SIZE];
+    sprintf(buffer, "REGISTER %s -p %s", username, password);
+    send(sock, buffer, strlen(buffer), 0);
+    memset(buffer, 0, sizeof(buffer));
+    read(sock, buffer, sizeof(buffer));
+    printf("%s\n", buffer);
+}
+
+void login_user(int sock, const char *username, const char *password) {
+    char buffer[BUFFER_SIZE];
+    sprintf(buffer, "LOGIN %s -p %s", username, password);
+    send(sock, buffer, strlen(buffer), 0);
+    memset(buffer, 0, sizeof(buffer));
+    read(sock, buffer, sizeof(buffer));
+    printf("%s\n", buffer);
+
+    if (strstr(buffer, "berhasil login") == NULL) {
+        fprintf(stderr, "Failed to login as monitor\n");
+        close(sock);
+        exit(EXIT_FAILURE);
+    }
+}
+```
+
+- **register_user**: Mengirimkan perintah `REGISTER` ke server dengan username dan password yang diberikan, kemudian menunggu respons dari server dan mencetaknya.
+- **login_user**: Mengirimkan perintah `LOGIN` ke server dengan username dan password yang diberikan, kemudian menunggu respons dari server dan mencetaknya. Jika login gagal, program akan menutup socket dan keluar.
+
+#### Fungsi Monitor Chat
+
+```c
+void *monitor_chat(void *args) {
+    MonitorArgs *monitorArgs = (MonitorArgs *)args;
+    char buffer[BUFFER_SIZE];
+    char chat_file[BUFFER_SIZE];
+
+    sprintf(chat_file, "%s/%s/chat.csv", monitorArgs->channel, monitorArgs->room);
+
+    struct stat file_stat;
+    time_t last_mod_time = 0;
+
+    while (1) {
+        if (stat(chat_file, &file_stat) == 0) {
+            if (file_stat.st_mtime != last_mod_time) {
+                last_mod_time = file_stat.st_mtime;
+
+                FILE *file = fopen(chat_file, "r");
+                if (file == NULL) {
+                    perror("Failed to open chat.csv");
+                    continue;
+                }
+
+                printf("\n");
+
+                while (fgets(buffer, sizeof(buffer), file)) {
+                    char *date = strtok(buffer, ",");
+                    char *id_chat = strtok(NULL, ",");
+                    char *sender = strtok(NULL, ",");
+                    char *chat = strtok(NULL, "\n");
+
+                    if (chat[0] == '"' && chat[strlen(chat) - 1] == '"') {
+                        chat[strlen(chat) - 1] = '\0';
+                        chat++;
+                    }
+
+                    printf("[%s][%s][%s] \"%s\"\n", date, id_chat, sender, chat);
+                    fflush(stdout);
+                }
+                fclose(file);
+                printf("\n");
+            }
+        }
+        sleep(1);
+    }
+    return NULL;
+}
+```
+
+- **monitor_chat**: Fungsi ini berjalan dalam thread terpisah dan terus memantau perubahan pada file `chat.csv` dalam channel dan room yang diberikan. Jika file diubah, fungsi ini akan membacanya dan mencetak chat ke layar.
+
+#### Fungsi Utama (main)
+
+```c
+int main(int argc, char *argv[]) {
+    if (argc != 5 || (strcmp(argv[1], "LOGIN") != 0 && strcmp(argv[1], "REGISTER") != 0) || strcmp(argv[3], "-p") != 0) {
+        fprintf(stderr, "Usage: %s REGISTER|LOGIN <username> -p <password>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    int sock = 0;
+    struct sockaddr_in serv_addr;
+    char buffer[BUFFER_SIZE] = {0};
+    pthread_t tid;
+
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(PORT);
+
+    if (inet_pton(AF_INET, IP, &serv_addr.sin_addr) <= 0) {
+        perror("Invalid address/ Address not supported");
+        exit(EXIT_FAILURE);
+    }
+
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("Connection failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Connected to server\n");
+
+    if (strcmp(argv[1], "REGISTER") == 0) {
+        register_user(sock, argv[2], argv[4]);
+        close(sock);
+        return 0;
+    } else if (strcmp(argv[1], "LOGIN") == 0) {
+        login_user(sock, argv[2], argv[4]);
+    }
+
+    char channel[50] = "";
+    char room[50] = "";
+
+    while (1) {
+        printf("[monitor] ");
+        fgets(buffer, BUFFER_SIZE, stdin);
+        buffer[strcspn(buffer, "\n")] = 0;
+
+        if (strstr(buffer, "-channel") != NULL && strstr(buffer, "-room") != NULL) {
+            char *channel_token = strtok(buffer, " ");
+            channel_token = strtok(NULL, " ");
+            strcpy(channel, channel_token);
+            strtok(NULL, " ");
+            char *room_token = strtok(NULL, " ");
+            strcpy(room, room_token);
+
+            MonitorArgs *monitorArgs = (MonitorArgs *)malloc(sizeof(MonitorArgs));
+            monitorArgs->socket = sock;
+            strcpy(monitorArgs->channel, channel);
+            strcpy(monitorArgs->room, room);
+
+            if (pthread_create(&tid, NULL, monitor_chat, (void *)monitorArgs) != 0) {
+                perror("Thread creation failed");
+                free(monitorArgs);
+                close(sock);
+                exit(EXIT_FAILURE);
+            }
+            break;
+        }
+    }
+
+    pthread_join(tid, NULL);
+    close(sock);
+    return 0;
+}
+```
+
+- **main**: Fungsi utama dari program. Ini memeriksa argumen yang diberikan oleh pengguna, membuat koneksi ke server, dan melakukan registrasi atau login. Jika login berhasil, program akan meminta pengguna untuk memasukkan channel dan room yang ingin dipantau, kemudian memulai thread untuk memantau chat di channel dan room tersebut.
+
+### Autentikasi
+
+Autentikasi dilakukan melalui perintah `REGISTER` dan `LOGIN` yang dikirim ke server. Berikut adalah cara kerjanya:
+
+1. **Registrasi Pengguna**:
+   - Perintah `REGISTER` dikirim ke server dengan username dan password.
+   - Server memproses perintah ini dan menambahkan pengguna baru ke dalam sistem.
+
+2. **Login Pengguna**:
+   - Perintah `LOGIN` dikirim ke server dengan username dan password.
+   - Server memeriksa kredensial yang diberikan dan memberikan respons.
+   - Jika login berhasil, program akan melanjutkan untuk memantau chat.
+
+### Monitoring Chat
+
+Setelah login, pengguna dapat memasukkan channel dan room yang ingin dipantau. Program akan membuat thread yang menjalankan fungsi `monitor_chat`, yang memantau file `chat.csv` dalam channel dan room yang diberikan. Setiap kali file diubah, program akan membaca isinya dan mencetak chat ke layar.
+
