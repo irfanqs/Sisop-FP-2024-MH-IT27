@@ -845,6 +845,7 @@ void delete_chat(const char *channel, const char *room, int id_chat, int client_
 </details>
 
 **Hasil**
+
 ![image](https://github.com/Daniwahyuaa/readmefpsisop/assets/150106905/1fe7d296-bb1d-4749-b5d1-63dab5ee3e12)
 
 ## Admin 
@@ -1104,6 +1105,7 @@ void delete_channel(const char* username, const char* channel, int client_socket
 </details>
 
 **Hasil**
+
 ![image](https://github.com/Daniwahyuaa/readmefpsisop/assets/150106905/486123c9-0e1a-4b80-80b8-489a8b011d2c)
 
 ### Delete Room All
