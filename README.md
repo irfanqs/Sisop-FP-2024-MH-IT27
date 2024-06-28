@@ -496,6 +496,40 @@ void list_room(const char *channel, int client_socket) {
 ```
 </details>
 
+### Users
+Fungsi `list_users` bertujuan untuk mengirimkan daftar nama pengguna dalam sebuah channel kepada client yang meminta informasi tersebut. Proses dimulai dengan validasi izin pengguna yang meminta daftar tersebut. Setelah itu, fungsi membuka file `auth.csv` yang berisi informasi pengguna dalam folder `admin` dari channel yang spesifik. Jika file berhasil dibuka, fungsi membaca setiap baris dalam file untuk mendapatkan nama pengguna, yang kemudian dikumpulkan dalam sebuah string respons. Jika tidak ditemukan pengguna dalam file tersebut, fungsi akan mengirim pesan bahwa tidak ada pengguna yang ditemukan. Jika ada kesalahan dalam membuka file atau operasi lainnya, fungsi mengirim pesan kesalahan yang sesuai kepada client.
+**Kode**:
+<details>
+<summary><h3>Klik untuk selengkapnya</h3>></summary>
+
+```c
+void list_users(int client_socket) {
+    if (validate_csv_users(clients[client_socket].username, client_socket) == 1) {
+        FILE *file = fopen("users.csv", "r");
+        if (file == NULL) {
+            perror("Failed to open users.csv");
+            send_response(client_socket, "Failed to open users.csv\n");
+            return;
+        }
+
+        char line[256];
+        char response[1024] = "";
+        while (fgets(line, sizeof(line), file)) {
+            char *token = strtok(line, ",");
+            token = strtok(NULL, ","); // username
+            strcat(response, token);
+            strcat(response, " ");
+        }
+
+        fclose(file);
+        send(client_socket, response, strlen(response), 0);
+    } else {
+        send_response(client_socket, "Permission denied\n");
+    }
+}
+```
+</details>
+
 ### Hasil
 ![image](https://github.com/Daniwahyuaa/readmefpsisop/assets/150106905/dc73fba5-a00b-4eee-b3de-42db9eedd17c)
 
